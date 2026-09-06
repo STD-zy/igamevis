@@ -17,7 +17,9 @@ public:
 
     bool Execute() override;
 
+    // ============================================================
     // 参数设置函数
+    // ============================================================
     void SetAbsoluteTolerance(double tol) { m_AbsoluteTolerance = tol; }
     double GetAbsoluteTolerance() const { return m_AbsoluteTolerance; }
 
@@ -39,11 +41,14 @@ public:
 protected:
     double ComputeEffectiveTolerance(DataObject::Pointer input);
 
-    // 使用暴力搜索合并重合点
     bool MergeCoincidentPointsBruteForce(Points::Pointer points, double tolerance, std::vector<igIndex>& oldToNewMap,
                                          igIndex& newPointCount, const std::vector<bool>& pointIsUsed);
 
     bool IsCellDegenerateWithIds(const igIndex* pointIds, int numPoints);
+
+    // 复制属性数组（保持原始类型）
+    ArrayObject::Pointer CloneAttributeArray(ArrayObject::Pointer src, igIndex newSize,
+                                             const std::vector<igIndex>& oldToNewMap, igIndex numOldPoints);
 
 private:
     double m_AbsoluteTolerance = 0.001;
