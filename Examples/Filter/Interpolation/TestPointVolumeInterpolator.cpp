@@ -13,11 +13,13 @@
 #include <iostream>
 #include <vector>
 
-// 守卫：核心 Filter 只允许插值 PointData。若允许选到 CellData，
-// 会以点 ID 访问长度=单元数的数组而越界。
+// 守卫：核心 Filter 只允许插值 PointData。
+// SetAttributeByIndex/ByName 的 index/name 使用"完整 AttributeSet"索引（GUI 传的就是它）；
+// PointData/CellData 可能交错，应选中后校验 attachment == IG_POINT，而不是在 PointData
+// 子列表里重解释（否则交错时会选错属性或误报越界）。
 namespace {
 bool AttributeSelectionGuardChecks() {
-    std::cerr << "\n[Guard] filter attribute must be PointData:\n";
+    std::cerr << "\n[Guard] attribute index must use full AttributeSet order and resolve to PointData:\n";
     bool ok = true;
 
     auto mesh = iGame::UnstructuredMesh::New();
@@ -29,6 +31,7 @@ bool AttributeSelectionGuardChecks() {
     igIndex tet[4] = {0, 1, 2, 3};
     mesh->AddCell(tet, 4, iGame::IG_TETRA);
 
+    // 故意交错：完整索引 0=PtA(Point) 1=CellA(Cell) 2=PtB(Point)
     auto pa = iGame::FloatArray::New();
     pa->SetName("PtA");
     pa->SetDimension(1);
@@ -42,6 +45,13 @@ bool AttributeSelectionGuardChecks() {
     ca->Resize(1);
     ca->SetValue(0, 99.0);
     mesh->GetAttributeSet()->AddScalar(IG_CELL, ca);
+
+    auto pb = iGame::FloatArray::New();
+    pb->SetName("PtB");
+    pb->SetDimension(1);
+    pb->Resize(4);
+    for (IGsize i = 0; i < 4; ++i) pb->SetValue(i, double(100 + i));
+    mesh->GetAttributeSet()->AddScalar(IG_POINT, pb);
 
     auto query = iGame::PointSet::New();
     query->AddPoint(iGame::Point(0.25f, 0.25f, 0.25f));
@@ -63,26 +73,50 @@ bool AttributeSelectionGuardChecks() {
     }
     {
         auto f = makeFilter();
-        f->SetAttributeByIndex(0);
-        const bool succeeded = f->Execute();
-        std::cerr << (succeeded ? "  -> PASS" : "  -> FAIL")
-                  << " : selecting PointData by index works\n";
-        ok = ok && succeeded;
-    }
-    {
-        auto f = makeFilter();
         f->SetAttributeByName("PtA");
         const bool succeeded = f->Execute();
         std::cerr << (succeeded ? "  -> PASS" : "  -> FAIL")
-                  << " : selecting PointData by name works\n";
+                  << " : selecting PtA by name works\n";
         ok = ok && succeeded;
     }
     {
         auto f = makeFilter();
-        f->SetAttributeByIndex(7); // 越界（点属性只有 1 个）
+        f->SetAttributeByName("PtB");
+        const bool succeeded = f->Execute();
+        std::cerr << (succeeded ? "  -> PASS" : "  -> FAIL")
+                  << " : selecting PtB by name works (interleaved layout)\n";
+        ok = ok && succeeded;
+    }
+    {
+        auto f = makeFilter();
+        f->SetAttributeByIndex(0); // 完整索引 0 = PtA（Point）
+        const bool succeeded = f->Execute();
+        std::cerr << (succeeded ? "  -> PASS" : "  -> FAIL")
+                  << " : index 0 (PtA, Point) works\n";
+        ok = ok && succeeded;
+    }
+    {
+        auto f = makeFilter();
+        f->SetAttributeByIndex(1); // 完整索引 1 = CellA（Cell）→ 必须被拒
         const bool rejected = !f->Execute();
         std::cerr << (rejected ? "  -> PASS" : "  -> FAIL")
-                  << " : out-of-range point attribute index is rejected\n";
+                  << " : index 1 (CellA, Cell) is rejected\n";
+        ok = ok && rejected;
+    }
+    {
+        auto f = makeFilter();
+        f->SetAttributeByIndex(2); // 完整索引 2 = PtB（Point），不能用 PointData 子索引重解释
+        const bool succeeded = f->Execute();
+        std::cerr << (succeeded ? "  -> PASS" : "  -> FAIL")
+                  << " : index 2 (PtB, Point) works after a Cell entry\n";
+        ok = ok && succeeded;
+    }
+    {
+        auto f = makeFilter();
+        f->SetAttributeByIndex(5); // 越界（共 3 个属性）
+        const bool rejected = !f->Execute();
+        std::cerr << (rejected ? "  -> PASS" : "  -> FAIL")
+                  << " : out-of-range attribute index is rejected\n";
         ok = ok && rejected;
     }
     return ok;
