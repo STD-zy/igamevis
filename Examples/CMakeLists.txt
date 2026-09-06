@@ -215,6 +215,7 @@ igame_add_example(testSetRenderingPressure Rendering/SetRenderingPressure.cpp)
 
 # Attribute
 igame_add_example(testChangeRange Attribute/TestSubDataRangeChangeAndRecollect.cpp)
+igame_add_example(testResampleToLine Filter/TestResampleToLine.cpp)
 igame_add_example(testPointCoordinates Filter/PointCoordinates/TestPointCoordinates.cpp)
 igame_add_example(testPointAndCellIds Filter/PointAndCellIds/TestPointAndCellIds.cpp)
 
