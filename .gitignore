@@ -1,7 +1,7 @@
 # Project exclude paths
 /cmake-build-*/
 /cmake-autobuild-*/
-
+/CMakeGPS/
 
 /.idea/
 /out/
@@ -31,8 +31,8 @@
 /Examples/Models/redsea
 /Examples/Models/sukong_Step-1_2.vtu
 /ThirdParty/libtorch/
-
-logs/
+# Runtime logs
+/logs/
 
 # ===== Added during feature/random-deflect-filters cleanup =====
 Examples/Cmake/
@@ -42,7 +42,7 @@ Examples/cmake-build-*/
 Examples/Filter/Tet_Plane.vtu
 Examples/Filter/VectorFieldTest_Fan_UnstructuredGrid.vtk
 
-# Compressed .vtu copies under Models — zlib compression is NOT supported by framework VTU reader;
+# Compressed .vtu copies under Models - zlib compression is NOT supported by framework VTU reader;
 # the Legacy .vtk counterparts are the ones tracked for this repo.
 Examples/Models/Tet_Plane.vtu
 
