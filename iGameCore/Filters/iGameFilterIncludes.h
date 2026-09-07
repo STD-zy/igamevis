@@ -25,6 +25,7 @@
 #include "Periodic/iGameAngularPeriodicFilter.h"
 #include "PlotLine/iGameGeneratePlotLineDataFilter.h"
 #include "Selection/iGameGetCellsInFrustumFilter.h"
+#include "Selection/iGameExtractCellsByRegionFilter.h"
 #include "Selection/iGameGetClosestCellsInLineFilter.h"
 #include "Selection/iGameGetClosestPointsInLineFilter.h"
 #include "Selection/iGameGetPointsInFrustumFilter.h"
