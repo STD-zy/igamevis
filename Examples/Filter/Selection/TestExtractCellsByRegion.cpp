@@ -66,9 +66,10 @@ int main() {
     std::cout << "Box(invalid min>max) Execute -> " << (invalidBoxFilter->Execute() ? "true" : "false")
               << " (expect false)" << std::endl;
 
-    /* 按球体提取（宽松：任一顶点在球内） */
+    /* 按球体提取（宽松：任一顶点在球内）。
+     * 半径取 0.3，避免半径 1.0 将整张网格全选，无法验证筛选结果。 */
     auto sphereFilter = iGame::ExtractCellsByRegionFilter::New();
-    sphereFilter->SetSphere(iGame::Vector3d(0.0, 0.0, 0.0), 1.0);
+    sphereFilter->SetSphere(iGame::Vector3d(0.0, 0.0, 0.0), 0.3);
     sphereFilter->SetRequireAllPoints(false);
     sphereFilter->SetInput(0, mesh);
     if (!sphereFilter->Execute()) {

@@ -78,6 +78,28 @@ bool ExtractCellsByRegionFilter::Execute() {
     return true;
 }
 
+namespace {
+
+// 按输入数组的实际底层类型创建输出数组，避免属性复制时统一转换成 float。
+ArrayObject::Pointer CreateArrayOfSameType(ArrayObject* inArray) {
+    switch (inArray->GetArrayType()) {
+        case IG_FloatArray: return FloatArray::New();
+        case IG_DoubleArray: return DoubleArray::New();
+        case IG_IntArray:
+        case IG_INTARRAY: return IntArray::New();
+        case IG_UnsignedIntArray: return UnsignedIntArray::New();
+        case IG_CharArray: return CharArray::New();
+        case IG_UnsignedCharArray: return UnsignedCharArray::New();
+        case IG_ShortArray: return ShortArray::New();
+        case IG_UnsignedShortArray: return UnsignedShortArray::New();
+        case IG_LongLongArray: return LongLongArray::New();
+        case IG_UnsignedLongLongArray: return UnsignedLongLongArray::New();
+        default: return FloatArray::New();
+    }
+}
+
+} // namespace
+
 void ExtractCellsByRegionFilter::BuildOutputMesh() {
     auto outMesh = UnstructuredMesh::New();
     auto outPoints = Points::New();
@@ -132,7 +154,7 @@ void ExtractCellsByRegionFilter::CopyAttributeDataToOutput(const UnstructuredMes
         auto attr = inAllAttr->GetElement(a);
         if (attr.isDeleted || attr.pointer.IsNull()) continue;
         auto inArray = attr.pointer;
-        auto outArray = FloatArray::New();
+        auto outArray = CreateArrayOfSameType(inArray);
         outArray->SetName(inArray->GetName());
         outArray->SetDimension(inArray->GetDimension());
         if (attr.attachmentType == IG_CELL) { // 单元属性：按“被选中 cell 的原序号”逐行搬运
