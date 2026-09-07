@@ -256,6 +256,7 @@ igame_add_example(testGetClosestPointsInLine Filter/Selection/TestGetClosestPoin
 igame_add_example(testGetClosestCellsInLine Filter/Selection/TestGetClosestCellsInLine.cpp)
 igame_add_example(testGetPointsInFrustum Filter/Selection/TestGetPointsInFrustum.cpp)
 igame_add_example(testGetCellsInFrustum Filter/Selection/TestGetCellsInFrustum.cpp)
+igame_add_example(testExtractCellsByRegion Filter/Selection/TestExtractCellsByRegion.cpp)
 
 # Data processing
 igame_add_example(testExtractLocation Filter/DataProcessing/ExtractLocation/TestExtractLocation.cpp)

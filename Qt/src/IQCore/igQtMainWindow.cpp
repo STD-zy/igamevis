@@ -39,6 +39,7 @@
 #include "Transformation/iGameTransformFilter.h"
 
 #include "FeatureExtraction/iGameFeatureEdgesFilter.h"
+#include "Selection/iGameExtractCellsByRegionFilter.h"
 #include "MyFilter/iGameExtractCellsByTypeFilter.h"
 
 #include "Convert/iGameConvertToPointCloudFilter.h"
@@ -1409,6 +1410,104 @@ void igQtMainWindow::showDarkFramelessMessage(const QString& title, const QStrin
 }
 
 void igQtMainWindow::initAllFilters() {
+    // 按区域提取单元：直接挂在「算法处理」一级菜单下。
+    connect(ui->menu_filters->addAction(QStringLiteral("按区域提取单元 (Extract Cells By Region)")),
+            &QAction::triggered, this, [this](bool) {
+                auto scene = rendererWidget ? rendererWidget->GetScene() : nullptr;
+                auto currentModel = scene ? scene->GetCurrentModel() : nullptr;
+                if (!currentModel) {
+                    showDarkFramelessMessage(QStringLiteral("按区域提取单元"), QStringLiteral("当前没有模型"));
+                    return;
+                }
+
+                auto object = currentModel->GetDataObject();
+                if (iGame::DynamicCast<iGame::UnstructuredMesh>(object).IsNull()) {
+                    showDarkFramelessMessage(QStringLiteral("按区域提取单元"),
+                                             QStringLiteral("当前模型不是非结构网格（UnstructuredMesh）"));
+                    return;
+                }
+
+                auto* dialog = new igQtFilterDialogDockWidget(this, true);
+                dialog->setFilterTitle(QStringLiteral("按区域提取单元"));
+                dialog->setFilterDescription(QStringLiteral("选择 Box/Sphere 区域，提取区域内的单元生成子网格"));
+                const int regionTypeId = dialog->addParameter(
+                        igQtFilterDialogDockWidget::QT_COMBO_BOX, QStringLiteral("区域类型"),
+                        std::vector<QString>{QStringLiteral("盒子 Box"), QStringLiteral("球体 Sphere")});
+                const int boxMinId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                           QStringLiteral("Box 最小点 (x,y,z)"), "0,0,0");
+                const int boxMaxId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                           QStringLiteral("Box 最大点 (x,y,z)"), "1,1,1");
+                const int centerId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                           QStringLiteral("球心 (x,y,z)"), "0,0,0");
+                const int radiusId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                           QStringLiteral("球半径"), "1.0");
+                const int strictId = dialog->addParameter(
+                        igQtFilterDialogDockWidget::QT_CHECK_BOX, QStringLiteral("严格（所有顶点都在区域内）"), "true");
+                dialog->show();
+
+                dialog->setApplyFunctor([=, this]() {
+                    bool ok = false;
+                    const int regionType = dialog->getComboIndex(regionTypeId, ok);
+                    const bool requireAllPoints = dialog->getChecked(strictId, ok);
+                    auto filter = iGame::ExtractCellsByRegionFilter::New();
+                    filter->SetRequireAllPoints(requireAllPoints);
+
+                    auto parseVector = [](QWidget* widget, iGame::Vector3d& result) {
+                        auto* edit = qobject_cast<QLineEdit*>(widget);
+                        if (!edit) return false;
+                        QString text = edit->text();
+                        text.replace(',', ' ');
+                        const auto parts = text.simplified().split(' ', Qt::SkipEmptyParts);
+                        if (parts.size() != 3) return false;
+                        double values[3]{};
+                        for (int i = 0; i < 3; ++i) {
+                            bool componentOk = false;
+                            values[i] = parts.at(i).toDouble(&componentOk);
+                            if (!componentOk) return false;
+                        }
+                        result = iGame::Vector3d(values);
+                        return true;
+                    };
+
+                    if (regionType == 0) {
+                        iGame::Vector3d minimum, maximum;
+                        if (!parseVector(dialog->getWidget(boxMinId), minimum) ||
+                            !parseVector(dialog->getWidget(boxMaxId), maximum)) {
+                            showDarkFramelessMessage(QStringLiteral("按区域提取单元"),
+                                                     QStringLiteral("Box 参数格式错误，请使用 x,y,z 或 x y z"));
+                            return;
+                        }
+                        filter->SetBox(minimum, maximum);
+                    } else if (regionType == 1) {
+                        iGame::Vector3d center;
+                        const double radius = dialog->getDouble(radiusId, ok);
+                        if (!parseVector(dialog->getWidget(centerId), center) || !ok || radius <= 0.0) {
+                            showDarkFramelessMessage(QStringLiteral("按区域提取单元"),
+                                                     QStringLiteral("球心格式错误或球半径不是正数"));
+                            return;
+                        }
+                        filter->SetSphere(center, radius);
+                    } else {
+                        showDarkFramelessMessage(QStringLiteral("按区域提取单元"), QStringLiteral("区域类型无效"));
+                        return;
+                    }
+
+                    filter->SetInput(object);
+                    if (!filter->Execute()) {
+                        showDarkFramelessMessage(QStringLiteral("按区域提取单元"), QStringLiteral("提取失败，请检查区域参数"));
+                        return;
+                    }
+                    auto output = filter->GetOutput();
+                    if (!output) {
+                        showDarkFramelessMessage(QStringLiteral("按区域提取单元"), QStringLiteral("输出对象为空"));
+                        return;
+                    }
+                    modelTreeWidget->addDataObjectToModelTree(output, ItemSource::Algorithm);
+                    rendererWidget->update();
+                    dialog->close();
+                });
+            });
+
     /* DIME #19：高程标量场（任意方向投影） */
     connect(ui->action_Elevation, &QAction::triggered, this, [this]() {
         auto model = rendererWidget->GetScene()->GetCurrentModel();
