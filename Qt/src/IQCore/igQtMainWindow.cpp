@@ -40,7 +40,6 @@
 
 #include "MyFilter/iGameExtractCellsByTypeFilter.h"
 #include "FeatureExtraction/iGameFeatureEdgesFilter.h"
-
 #include "Interactor/iGameInteractor.h"
   #include "Convert/iGameConvertToPointCloudFilter.h"
   #include "Convert/iGameConvertToPointDataFilter.h"
@@ -48,6 +47,7 @@
   #include "Convert/iGameConvertToVolumeMeshFilter.h"
   
   #include "MyFilter/iGameCellCenterFilter.h"
+ #include "MyFilter/iGameCleanToGridFilter.h"
   
   #include "Interactor/iGameInteractor.h"
 
@@ -1713,6 +1713,179 @@ void igQtMainWindow::initAllFilters() {
             if (arrayName.isEmpty()) arrayName = QStringLiteral("Ids");
             const int start = dialog->getInt(startId, ok);
 
+    // 网格清理 (Clean to Grid)
+    connect(ui->menu_filters->addAction(QStringLiteral("网格清理 (Clean to Grid)")), &QAction::triggered, this,
+            [this](bool) {
+                // ---- 检查是否有模型 ----
+                auto currentModel = rendererWidget->GetScene()->GetCurrentModel();
+                if (!currentModel) {
+                    showDarkFramelessMessage(QStringLiteral("提示"), QStringLiteral("请先加载一个模型"));
+                    return;
+                }
+
+                auto obj = currentModel->GetDataObject();
+                if (!obj) {
+                    showDarkFramelessMessage(QStringLiteral("提示"), QStringLiteral("当前模型没有有效数据"));
+                    return;
+                }
+
+                // ---- 检查数据类型是否支持 ----
+                auto dataType = obj->GetDataObjectType();
+                if (dataType != IG_UNSTRUCTURED_MESH && dataType != IG_SURFACE_MESH && dataType != IG_VOLUME_MESH &&
+                    dataType != IG_STRUCTURED_MESH) {
+                    showDarkFramelessMessage(QStringLiteral("不支持的数据类型"),
+                                             QStringLiteral("当前数据类型不支持网格清理。\n支持类型：非结构网格、表面网"
+                                                            "格、体网格、结构化网格"));
+                    return;
+                }
+
+                // ---- 获取当前点数和单元数 ----
+                auto pointSet = DynamicCast<PointSet>(obj);
+                igIndex originalPoints = pointSet ? pointSet->GetNumberOfPoints() : 0;
+                igIndex originalCells = 0;
+
+                if (auto um = DynamicCast<UnstructuredMesh>(obj)) {
+                    originalCells = um->GetNumberOfCells();
+                } else if (auto sm = DynamicCast<SurfaceMesh>(obj)) {
+                    originalCells = sm->GetNumberOfFaces();
+                } else if (auto vm = DynamicCast<VolumeMesh>(obj)) {
+                    originalCells = vm->GetNumberOfVolumes();
+                }
+
+                // ---- 创建参数对话框 ----
+                igQtFilterDialogDockWidget* dialog = new igQtFilterDialogDockWidget(this, true);
+                dialog->setFilterTitle(QStringLiteral("网格清理 (Clean to Grid)"));
+                dialog->setFilterDescription(
+                        QStringLiteral("当前网格：%1 个点，%2 个单元").arg(originalPoints).arg(originalCells));
+
+                // ---- 添加参数控件（仅保留容差设置） ----
+                // 1. 合并容差
+                int toleranceId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                       QStringLiteral("合并容差"), "0.001");
+
+                // 2. 容差类型（绝对/相对）
+                std::vector<QString> toleranceTypes = {"绝对 (Absolute)", "相对 (Relative)"};
+                int toleranceTypeId = dialog->addParameter(igQtFilterDialogDockWidget::QT_COMBO_BOX,
+                                                           QStringLiteral("容差类型"), toleranceTypes);
+
+                // ---- 显示对话框 ----
+                dialog->show();
+
+
+                // ---- 设置 Apply 回调 ----
+                dialog->setApplyFunctor([=, this]() {
+                    bool ok;
+
+                    double tolerance = dialog->getDouble(toleranceId, ok);
+                    if (!ok || tolerance <= 0) {
+                        showDarkFramelessMessage(QStringLiteral("参数错误"),
+                                                 QStringLiteral("请输入有效的容差（大于0的数值）"));
+                        return;
+                    }
+
+                    int tolTypeIdx = dialog->getComboIndex(toleranceTypeId, ok);
+                    bool isAbsolute = (tolTypeIdx == 0);
+
+                    // ---- 创建并执行滤镜（所有清理功能默认全部开启） ----
+                    auto filter = CleanToGridFilter::New();
+                    filter->SetInput(obj);
+
+                    filter->SetAbsoluteTolerance(tolerance);
+                    filter->SetToleranceIsAbsolute(isAbsolute);
+                    filter->SetMergePoints(true);           // 默认开启
+                    filter->SetRemoveDegenerateCells(true); // 默认开启
+                    filter->SetCompactPointFields(true);    // 默认开启
+
+                    if (!filter->Execute()) {
+                        showDarkFramelessMessage(QStringLiteral("执行失败"),
+                                                 QStringLiteral("网格清理执行失败，请检查输入数据"));
+                        return;
+                    }
+
+                    auto output = filter->GetOutput();
+                    if (!output) {
+                        showDarkFramelessMessage(QStringLiteral("执行失败"), QStringLiteral("滤镜没有产生输出"));
+                        return;
+                    }
+
+                    // ---- 获取清理后的统计信息 ----
+                    auto outPointSet = DynamicCast<PointSet>(output);
+                    igIndex newPoints = outPointSet ? outPointSet->GetNumberOfPoints() : 0;
+                    igIndex newCells = 0;
+
+                    if (auto um = DynamicCast<UnstructuredMesh>(output)) {
+                        newCells = um->GetNumberOfCells();
+                    } else if (auto sm = DynamicCast<SurfaceMesh>(output)) {
+                        newCells = sm->GetNumberOfFaces();
+                    } else if (auto vm = DynamicCast<VolumeMesh>(output)) {
+                        newCells = vm->GetNumberOfVolumes();
+                    }
+
+                    long long pointDiff = (long long) originalPoints - (long long) newPoints;
+                    long long cellDiff = (long long) originalCells - (long long) newCells;
+                    double pointPercent = originalPoints > 0 ? (double) pointDiff / originalPoints * 100.0 : 0.0;
+                    double cellPercent = originalCells > 0 ? (double) cellDiff / originalCells * 100.0 : 0.0;
+
+                    // ---- 设置输出名称 ----
+                    QString outputName = QString::fromStdString(obj->GetName()) + "_cleaned";
+                    output->SetName(outputName.toStdString());
+
+                    auto drawObj = DynamicCast<DrawObject>(output);
+                    if (drawObj) { drawObj->ConvertToDrawableData(); }
+
+                    // ---- 添加到模型树 ----
+                    modelTreeWidget->addDataObjectToModelTree(output, ItemSource::Algorithm);
+
+                    // ---- 自动切换到新生成的模型 ----
+                    auto scene = rendererWidget->GetScene();
+                    auto modelList = scene->GetModelList();
+                    for (auto it = modelList->Begin(); it != modelList->End(); ++it) {
+                        auto model = it->second;
+                        if (model->GetDataObject() == output) {
+                            scene->SetCurrentModel(model);
+                            break;
+                        }
+                    }
+
+                    rendererWidget->update();
+
+                    // ---- 显示结果（仅统计信息） ----
+                    QString resultMsg = QStringLiteral("清理完成\n\n"
+                                                       "清理前：%1 个点，%2 个单元\n"
+                                                       "清理后：%3 个点，%4 个单元\n"
+                                                       "减少：%5 个点 (%6%)，%7 个单元 (%8%)")
+                                                .arg(originalPoints)
+                                                .arg(originalCells)
+                                                .arg(newPoints)
+                                                .arg(newCells)
+                                                .arg(pointDiff)
+                                                .arg(pointPercent, 0, 'f', 1)
+                                                .arg(cellDiff)
+                                                .arg(cellPercent, 0, 'f', 1);
+
+                    showDarkFramelessMessage(QStringLiteral("清理完成"), resultMsg, true);
+
+                    dialog->close();
+                });
+            });
+
+
+
+
+    QMenu* mesh_processing = ui->menu_filters->addMenu(QStringLiteral("数据处理 (Data Processing)"));
+    QAction* ghostCellAction = ui->menu_filters->addAction(QStringLiteral("Ghost 单元标记 (Ghost Cells)"));
+    connect(ghostCellAction, &QAction::triggered, this, [this](bool checked) {
+        if (rendererWidget->GetScene()->GetCurrentModel() == nullptr) return;
+        iGame::GhostCellFilter::Pointer filter = iGame::GhostCellFilter::New();
+        auto data = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+        filter->SetInput(data);
+        if (filter->Execute()) {
+            modelTreeWidget->updateAllAttriubute(data);
+            int index = data->GetAttributeSet()->GetAttributeIndex("GhostCells");
+            auto drawObject = iGame::DynamicCast<iGame::DrawObject>(data);
+            if (drawObject && index >= 0) {
+                auto item = modelTreeWidget->getItemFromObject(data);
+                if (item && item->childCount() > 0) {
             auto filter = iGameGenerateIdsFilter::New(dataType);
             filter->SetInput(obj);
             filter->SetArrayName(arrayName.toStdString());
@@ -4239,6 +4412,12 @@ void igQtMainWindow::initAllFilters() {
         static std::map<DataObjectId, ForceStaticMeshFilter::Pointer> s_fsmFilters;
         static std::map<DataObjectId, iGame::DataObject::Pointer> s_fsmOutputs;
 
+
+
+    connect(ui->menu_filters->addAction(QStringLiteral("单元几何中心 (Cell Center)")), &QAction::triggered,
+            this, [this](bool) {
+        auto currentModel = rendererWidget->GetScene()->GetCurrentModel();
+        if (!currentModel) return;
         const DataObjectId key = obj->GetDataObjectId();
         auto& filter = s_fsmFilters[key];
         if (!filter) { filter = ForceStaticMeshFilter::New(); }
@@ -4254,6 +4433,21 @@ void igQtMainWindow::initAllFilters() {
             return;
         }
 
+        modelTreeWidget->addDataObjectToModelTree(filter->GetOutput(), Algorithm);
+        rendererWidget->update();
+    });
+
+
+
+
+    QMenu* convert = ui->menu_filters->addMenu(QStringLiteral("数据转换 (Convert)"));
+    connect(convert->addAction(QStringLiteral("转换为点数据 (Convert To PointData)")), &QAction::triggered, this, [&](bool checked) {
+        if (rendererWidget->GetScene()->GetCurrentModel() == nullptr) return;
+        auto obj = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+        ConvertToPointDataFilter::Pointer filter = ConvertToPointDataFilter::New();
+        filter->SetInput(obj);
+        if (filter->Execute()) {
+            modelTreeWidget->addDataObjectToModelTree(filter->GetOutput(), Algorithm);
         auto& registered = s_fsmOutputs[key];
         if (registered == nullptr || registered.get() != out.get()) {
             // 该输入的首次执行，或缓存被重建（几何变化）：作为新模型加入模型树并登记
@@ -4746,6 +4940,12 @@ void igQtMainWindow::initAllFilters() {
             return;
         }
 
+
+    QAction* vortex = view->addAction(QStringLiteral("计算涡量 (ComputeVorticity)"));
+    connect(vortex, &QAction::triggered, this, [this](bool checked) {
+        if (rendererWidget->GetScene()->GetCurrentModel() == nullptr) return;
+        auto data = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+        int index = data->GetAttributeIndex();
         // ---------- 收集属性信息 ----------
         struct AttrInfo {
             QString name;
