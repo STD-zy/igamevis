@@ -1,16 +1,22 @@
 #include "iGameExtractCellsByRegionFilter.h"
-
+#include <iGameAttributeSet.h>
 #include <iGameCell.h>
-
+#include <iGamePoints.h>
+#include <iGameType.h>
 IGAME_NAMESPACE_BEGIN
 
 ExtractCellsByRegionFilter::ExtractCellsByRegionFilter() {
     SetNumberOfInputs(1);
-    SetNumberOfOutputs(1);
+    SetNumberOfOutputs(1); // 输出网格，不是 0
 }
 
 void ExtractCellsByRegionFilter::SetBox(const Vector3d& min, const Vector3d& max) {
     m_RegionType = BOX;
+    // 校验每维 min <= max；任一维不满足即视为非法区域，置空后 Execute 会因 m_Box.isNull() 返回 false
+    if (min[0] > max[0] || min[1] > max[1] || min[2] > max[2]) {
+        m_Box.setNull();
+        return;
+    }
     m_Box = BoundingBox(min, max);
 }
 
@@ -24,41 +30,47 @@ void ExtractCellsByRegionFilter::SetRequireAllPoints(bool requireAllPoints) {
     m_RequireAllPoints = requireAllPoints;
 }
 
-bool ExtractCellsByRegionFilter::IsPointInRegion(const Vector3d& point) const {
+bool ExtractCellsByRegionFilter::IsPointInRegion(const Vector3d& p) const {
     if (m_RegionType == BOX) {
-        return m_Box.isIn(point);
+        return m_Box.isIn(p); // 含边界：min <= p <= max
     }
-    return (point - m_Center).squaredNorm() <= m_Radius * m_Radius;
+    return (p - m_Center).squaredNorm() <= m_Radius * m_Radius; // 平方避免开方
 }
 
 bool ExtractCellsByRegionFilter::Execute() {
     m_Mesh = DynamicCast<UnstructuredMesh>(GetInput(0));
     if (m_Mesh.IsNull()) return false;
 
+    // 区域合法性校验（防止 BOX 忘赋值 → 静默 0 个 cell）
     if (m_RegionType == BOX && m_Box.isNull()) return false;
-    if (m_RegionType == SPHERE && m_Radius <= 0.0) return false;
+    if (m_RegionType == SPHERE && m_Radius <= 0) return false;
 
     m_Ids.clear();
-    const IGsize cellCount = m_Mesh->GetNumberOfCells();
-    for (IGsize cellId = 0; cellId < cellCount; ++cellId) {
+    const IGsize cellNum = m_Mesh->GetNumberOfCells();
+    for (IGsize cellId = 0; cellId < cellNum; cellId++) {
         auto cell = m_Mesh->GetCell(cellId);
         if (!cell || cell->GetNumberOfPoints() == 0) continue;
-
-        bool selected = m_RequireAllPoints;
-        for (int pointId = 0; pointId < cell->GetNumberOfPoints(); ++pointId) {
-            const bool inside = IsPointInRegion(cell->GetPoint(pointId));
-            if (m_RequireAllPoints) {
-                if (!inside) {
-                    selected = false;
+        int n = cell->GetNumberOfPoints();
+        bool inRegion;
+        if (m_RequireAllPoints) { // 严格：所有顶点都在区域内
+            inRegion = true;
+            for (int i = 0; i < n; i++) {
+                if (!IsPointInRegion(cell->GetPoint(i))) {
+                    inRegion = false;
                     break;
                 }
-            } else if (inside) {
-                selected = true;
-                break;
+            }
+        } else { // 宽松：任一顶点在区域内
+            inRegion = false;
+            for (int i = 0; i < n; i++) {
+                if (IsPointInRegion(cell->GetPoint(i))) {
+                    inRegion = true;
+                    break;
+                }
             }
         }
-        if (selected) m_Ids.push_back(cellId);
-        if (cellCount > 0) UpdateProgress(static_cast<double>(cellId + 1) / cellCount);
+        if (inRegion) m_Ids.push_back(cellId);
+        if (cellNum > 0) UpdateProgress((double)(cellId + 1) / cellNum); // 汇报进度
     }
 
     BuildOutputMesh();
@@ -67,14 +79,80 @@ bool ExtractCellsByRegionFilter::Execute() {
 }
 
 void ExtractCellsByRegionFilter::BuildOutputMesh() {
-    auto output = UnstructuredMesh::New();
-    for (const igIndex cellId : m_Ids) {
-        igIndex pointIds[IGAME_CELL_MAX_SIZE]{};
-        const int pointCount = m_Mesh->GetCellPointIds(cellId, pointIds);
-        output->AddCell(pointIds, pointCount, m_Mesh->GetCellType(cellId));
+    auto outMesh = UnstructuredMesh::New();
+    auto outPoints = Points::New();
+    Points::Pointer inPoints = m_Mesh->GetPoints();
+    const IGsize inPointNum = m_Mesh->GetNumberOfPoints();
+
+    // 原网格点号 -> 输出网格点号；-1 表示该点没被任何被选 cell 引用，直接丢弃
+    std::vector<int> oldToNew(inPointNum, -1);
+
+    igIndex oldIds[IGAME_CELL_MAX_SIZE]{};
+    igIndex newIds[IGAME_CELL_MAX_SIZE]{};
+    for (int cellId : m_Ids) {
+        const int n = m_Mesh->GetCellPointIds(cellId, oldIds); // 该 cell 在原网格里的顶点号
+        for (int i = 0; i < n; i++) {
+            const igIndex old = oldIds[i];
+            if (oldToNew[old] < 0) { // 首次用到才拷入新点集，输出点数随提取变小
+                oldToNew[old] = static_cast<int>(outPoints->GetNumberOfPoints());
+                outPoints->AddPoint(inPoints->GetPoint(old));
+            }
+            newIds[i] = static_cast<igIndex>(oldToNew[old]); // 重映射成新点号
+        }
+        outMesh->AddCell(newIds, n, m_Mesh->GetCellType(cellId));
     }
-    output->SetPoints(m_Mesh->GetPoints());
-    m_OutputMesh = output;
+    outMesh->SetPoints(outPoints); // 独立的新点集，不再与输入共享
+
+    CopyAttributeDataToOutput(outMesh, oldToNew); // 点/单元属性按映射搬运，避免整份丢失
+
+    m_OutputMesh = outMesh;
+}
+
+void ExtractCellsByRegionFilter::CopyAttributeDataToOutput(const UnstructuredMesh::Pointer& outMesh,
+                                                           const std::vector<int>& oldToNew) {
+    AttributeSet::Pointer inData = m_Mesh->GetAttributeSet();
+    if (inData.IsNull()) return;
+    auto inAllAttr = inData->GetAllAttributes();
+    if (inAllAttr.IsNull()) return;
+
+    const IGsize outPointNum = outMesh->GetNumberOfPoints();
+    const IGsize outCellNum = outMesh->GetNumberOfCells();
+    if (outPointNum == 0 && outCellNum == 0) return; // 空提取，无需搬运属性
+
+    // 输出新点号 -> 原网格点号（oldToNew 的反查表）
+    std::vector<int> newToOld(outPointNum, -1);
+    for (IGsize o = 0; o < oldToNew.size(); o++) {
+        if (oldToNew[o] >= 0) newToOld[oldToNew[o]] = static_cast<int>(o);
+    }
+
+    auto outData = AttributeSet::New();
+    const IGsize attrNum = inAllAttr->GetNumberOfElements();
+    double values[IGAME_CELL_MAX_SIZE]{};
+    for (IGsize a = 0; a < attrNum; a++) {
+        auto attr = inAllAttr->GetElement(a);
+        if (attr.isDeleted || attr.pointer.IsNull()) continue;
+        auto inArray = attr.pointer;
+        auto outArray = FloatArray::New();
+        outArray->SetName(inArray->GetName());
+        outArray->SetDimension(inArray->GetDimension());
+        if (attr.attachmentType == IG_CELL) { // 单元属性：按“被选中 cell 的原序号”逐行搬运
+            outArray->Resize(outCellNum);
+            for (IGsize j = 0; j < outCellNum; j++) {
+                inArray->GetElement(m_Ids[j], values);
+                outArray->SetElement(j, values);
+            }
+        } else if (attr.attachmentType == IG_POINT) { // 点属性：按“输出点 -> 原网格点”逐行搬运
+            outArray->Resize(outPointNum);
+            for (IGsize j = 0; j < outPointNum; j++) {
+                inArray->GetElement(newToOld[j], values);
+                outArray->SetElement(j, values);
+            }
+        } else {
+            continue;
+        }
+        outData->AddAttribute(attr.type, attr.attachmentType, outArray, attr.GetDataRange());
+    }
+    outMesh->SetAttributeSet(outData);
 }
 
 IGAME_NAMESPACE_END
