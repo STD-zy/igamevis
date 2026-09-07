@@ -32,6 +32,8 @@
 #include "Convert/iGameConvertToPointDataFilter.h"
 #include "Convert/iGameConvertToSurfaceMeshFilter.h"
 #include "Convert/iGameConvertToVolumeMeshFilter.h"
+#include "DataProcessing/iGameRandomAttributesFilter.h"
+#include "FeatureExtraction/iGameDeflectNormalsFilter.h"
 #include "Convert/iGamePointSetToOctreeFilter.h"
 #include "Convert/iGameResampleToImageFilter.h"
 #include "MeshQuality/iGameMeshQualityFilter.h"
@@ -5330,6 +5332,320 @@ void igQtMainWindow::initAllFilters() {
             modelTreeWidget->addDataObjectToModelTree(res, ItemSource::Algorithm);
         }
     });
+    
+    // ========== 随机属性生成 (Random Attributes) ==========
+    connect(ui->menu_filters->addAction(QStringLiteral("随机属性生成 (Random Attributes)")), &QAction::triggered, this,
+            [&](bool checked) {
+                if (rendererWidget->GetScene() == nullptr || rendererWidget->GetScene()->GetCurrentModel() == nullptr) {
+                    showDarkFramelessMessage(QStringLiteral("无可用模型"), QStringLiteral("请先加载并选择模型。"));
+                    return;
+                }
+
+                igQtFilterDialogDockWidget* dialog = new igQtFilterDialogDockWidget(this, true);
+                dialog->setFilterTitle(QStringLiteral("随机属性生成 (Random Attributes)"));
+                dialog->setFixedWidth(360);
+
+                // 数据类型下拉框（模仿 ParaView vtkRandomAttributeGenerator 的 Data Type）
+                int dataTypeId = dialog->addParameter(
+                        igQtFilterDialogDockWidget::QT_COMBO_BOX, QStringLiteral("数据类型 (Data Type)"),
+                        {QStringLiteral("Float"), QStringLiteral("Double"), QStringLiteral("Int"),
+                         QStringLiteral("Unsigned Int"), QStringLiteral("Char"), QStringLiteral("Unsigned Char"),
+                         QStringLiteral("Short"), QStringLiteral("Unsigned Short"), QStringLiteral("Long Long"),
+                         QStringLiteral("Unsigned Long Long")});
+
+                int minId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                 QStringLiteral("最小值 (Minimum)"), "0");
+                int maxId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                 QStringLiteral("最大值 (Maximum)"), "255");
+
+                // 挂载位置下拉框（模仿 ParaView 的 Attribute Type: Point Data / Cell Data）
+                int attachId = dialog->addParameter(igQtFilterDialogDockWidget::QT_COMBO_BOX,
+                                                    QStringLiteral("挂载位置 (Attach To)"),
+                                                    {QStringLiteral("点 (Point)"), QStringLiteral("面/单元 (Cell)")});
+
+                int seedId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                  QStringLiteral("随机种子 (Seed)"), "0");
+
+                dialog->show();
+                dialog->setApplyFunctor([=, this]() {
+                    bool ok;
+
+                    // 数据类型索引 → IG_* 常量映射
+                    static const int kTypes[] = {
+                            IG_FLOAT, IG_DOUBLE,         IG_INT,       IG_UNSIGNED_INT,      IG_CHAR, IG_UNSIGNED_CHAR,
+                            IG_SHORT, IG_UNSIGNED_SHORT, IG_LONG_LONG, IG_UNSIGNED_LONG_LONG};
+                    int typeIdx = dialog->getComboIndex(dataTypeId, ok);
+
+                    double lo = dialog->getDouble(minId, ok);
+                    double hi = dialog->getDouble(maxId, ok);
+                    int attachIdx = dialog->getComboIndex(attachId, ok);
+                    unsigned int seed = static_cast<unsigned>(dialog->getInt(seedId, ok));
+
+                    auto obj = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+                    if (!obj) {
+                        dialog->close();
+                        return;
+                    }
+
+                    RandomAttributesFilter::Pointer filter = RandomAttributesFilter::New();
+                    filter->SetInput(obj);
+                    filter->SetRange(static_cast<float>(lo), static_cast<float>(hi));
+                    filter->SetDataType(kTypes[typeIdx]);
+                    filter->SetAttachmentType(attachIdx == 0 ? IG_POINT : IG_CELL);
+                    filter->SetSeed(seed);
+
+                    if (!filter->Execute()) {
+                        showDarkFramelessMessage(QStringLiteral("执行出错"),
+                                                 QStringLiteral("随机属性生成失败，请检查输入。"));
+                        dialog->close();
+                        return;
+                    }
+
+                    auto rawOut = filter->GetOutput();
+                    if (!rawOut) {
+                        dialog->close();
+                        return;
+                    }
+                    // ---- 审核问题③：输入/输出共享同一个 DataObject 会导致原节点与结果节点
+                    // 联动，这里 DeepCopy 出独立副本再挂到模型树，保证两节点状态隔离。
+                    auto cloneDeepCopy = [](DataObject::Pointer src) -> DataObject::Pointer {
+                        if (!src) return nullptr;
+                        auto out = DataObject::CreateDataObject(src->GetDataObjectType());
+                        if (!out) return nullptr;
+                        auto copyPS = [](PointSet* dst, PointSet* src) {
+                            auto pts = Points::New();
+                            if (src->GetPoints()) pts->DeepCopy(src->GetPoints());
+                            dst->SetPoints(pts);
+                            auto as = AttributeSet::New();
+                            if (auto sas = src->GetAttributeSet()) as->DeepCopy(sas);
+                            dst->SetAttributeSet(as);
+                        };
+                        if (auto sm = DynamicCast<SurfaceMesh>(src)) {
+                            if (auto dst = DynamicCast<SurfaceMesh>(out)) {
+                                if (dst->DeepCopy(sm)) return out;
+                                copyPS(dst, sm);
+                                if (auto f = sm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto vm = DynamicCast<VolumeMesh>(src)) {
+                            if (auto dst = DynamicCast<VolumeMesh>(out)) {
+                                copyPS(dst, vm);
+                                if (auto f = vm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto stm = DynamicCast<StructuredMesh>(src)) {
+                            if (auto dst = DynamicCast<StructuredMesh>(out)) {
+                                copyPS(dst, stm);
+                                if (auto f = stm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto um = DynamicCast<UnstructuredMesh>(src)) {
+                            if (auto dst = DynamicCast<UnstructuredMesh>(out)) {
+                                copyPS(dst, um);
+                                if (auto c = um->GetCellArray()) {
+                                    auto nc = CellArray::New(); nc->DeepCopy(c);
+                                    dst->SetCells(nc, um->GetCellTypes());
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto ps = DynamicCast<PointSet>(src)) {
+                            if (auto dst = DynamicCast<PointSet>(out)) { copyPS(dst, ps); return out; }
+                        }
+                        return out;
+                    };
+                    auto outObj = cloneDeepCopy(rawOut);
+                    if (!outObj) outObj = rawOut;  // 兜底：未知类型仍按原逻辑
+                    outObj->SetName(rawOut->GetName().empty() ? std::string("RandomAttrResult")
+                                                              : rawOut->GetName() + " (RandomAttr)");
+                    modelTreeWidget->addDataObjectToModelTree(outObj, Algorithm);
+                    rendererWidget->update();
+                    dialog->close();
+                });
+            });
+
+    // ========== 法向偏转 (Deflect Normals) ==========
+    connect(ui->menu_filters->addAction(QStringLiteral("法向偏转 (Deflect Normals)")), &QAction::triggered, this,
+            [&](bool checked) {
+                if (rendererWidget->GetScene() == nullptr || rendererWidget->GetScene()->GetCurrentModel() == nullptr) {
+                    showDarkFramelessMessage(QStringLiteral("无可用模型"), QStringLiteral("请先加载并选择模型。"));
+                    return;
+                }
+
+                auto obj = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+                if (!obj) return;
+
+                igQtFilterDialogDockWidget* dialog = new igQtFilterDialogDockWidget(this, true);
+                dialog->setFilterTitle(QStringLiteral("法向偏转 (Deflect Normals)"));
+                dialog->setFixedWidth(380);
+
+                // 审核问题②：当同一模型上 POINT/CELL 存在同名 3D 向量属性时，原实现会
+                // 取到 GetAttributeIndex 的第一个命中，造成错用。这里显式让用户指定挂载位置。
+                int vfAttachId = dialog->addParameter(
+                        igQtFilterDialogDockWidget::QT_COMBO_BOX,
+                        QStringLiteral("向量场所在位置 (Vector Field Location)"),
+                        {QStringLiteral("自动 Auto (Point -> Cell 兜底)"),
+                         QStringLiteral("点数据 Point Data"),
+                         QStringLiteral("单元/面数据 Cell Data")});
+
+                // 向量场下拉框（模仿 ParaView 的 Vector Array 选择）
+                int vecFieldId =
+                        dialog->addParameter(igQtFilterDialogDockWidget::QT_COMBO_BOX,
+                                             QStringLiteral("向量场 (Vector Field)"), {QStringLiteral("(请选择)")});
+
+                // 动态填充：从当前模型属性集中找出 dim==3 的向量属性
+                auto attrSet = obj->GetAttributeSet();
+                if (attrSet) {
+                    auto combo = dynamic_cast<QComboBox*>(dialog->getWidget(vecFieldId));
+                    if (combo) {
+                        combo->clear();
+                        bool found = false;
+                        for (size_t i = 0; i < attrSet->GetNumberOfAttributes(); ++i) {
+                            auto& attr = attrSet->GetAttribute(i);
+                            if (attr.pointer && !attr.isDeleted && attr.pointer->GetDimension() == 3) {
+                                combo->addItem(QString::fromStdString(attr.pointer->GetName()));
+                                found = true;
+                            }
+                        }
+                        if (!found) combo->addItem(QStringLiteral("(无可用向量属性)"));
+                    }
+                }
+
+                int strengthId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                      QStringLiteral("偏转强度 (Scale Factor)"), "1.0");
+
+                int useUserNormalId = dialog->addParameter(igQtFilterDialogDockWidget::QT_CHECK_BOX,
+                                                           QStringLiteral("使用自定义法向 (Use User Normal)"), "false");
+
+                int normalXId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                     QStringLiteral("法向 X (Normal X)"), "0");
+                int normalYId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                     QStringLiteral("法向 Y (Normal Y)"), "0");
+                int normalZId = dialog->addParameter(igQtFilterDialogDockWidget::QT_LINE_EDIT,
+                                                     QStringLiteral("法向 Z (Normal Z)"), "1");
+
+                dialog->show();
+                dialog->setApplyFunctor([=, this]() {
+                    bool ok;
+
+                    // 读取向量场名称
+                    auto combo = dynamic_cast<QComboBox*>(dialog->getWidget(vecFieldId));
+                    if (!combo || combo->currentText() == QStringLiteral("(无可用向量属性)") ||
+                        combo->currentText() == QStringLiteral("(请选择)")) {
+                        showDarkFramelessMessage(QStringLiteral("缺少向量场"),
+                                                 QStringLiteral("请先选择一个 3 分量的向量属性。"));
+                        return;
+                    }
+                    QString fieldName = combo->currentText();
+
+                    int attachIdx = dialog->getComboIndex(vfAttachId, ok);
+                    IGenum vfAttach = IG_NONE;
+                    if      (attachIdx == 1) vfAttach = IG_POINT;
+                    else if (attachIdx == 2) vfAttach = IG_CELL;
+
+                    double strength = dialog->getDouble(strengthId, ok);
+                    bool useUserNormal = dialog->getChecked(useUserNormalId, ok);
+                    double nx = dialog->getDouble(normalXId, ok);
+                    double ny = dialog->getDouble(normalYId, ok);
+                    double nz = dialog->getDouble(normalZId, ok);
+
+                    auto obj2 = rendererWidget->GetScene()->GetCurrentModel()->GetDataObject();
+                    if (!obj2) {
+                        dialog->close();
+                        return;
+                    }
+
+                    DeflectNormalsFilter::Pointer filter = DeflectNormalsFilter::New();
+                    filter->SetInput(obj2);
+                    filter->SetAttributeByName(fieldName.toStdString());
+                    filter->SetVectorFieldAttachment(vfAttach);
+                    filter->SetDeflectStrength(static_cast<float>(strength));
+                    filter->SetUseUserNormal(useUserNormal);
+                    filter->SetUserNormal(nx, ny, nz);
+
+                    if (!filter->Execute()) {
+                        showDarkFramelessMessage(QStringLiteral("执行出错"),
+                                                 QString::fromStdString(filter->GetMessage()));
+                        dialog->close();
+                        return;
+                    }
+
+                    auto rawOut = filter->GetOutput();
+                    if (!rawOut) { dialog->close(); return; }
+                    // ---- 审核问题③：独立 DeepCopy，避免与原模型节点共享同一个 DataObject ----
+                    auto cloneDN = [](DataObject::Pointer src) -> DataObject::Pointer {
+                        if (!src) return nullptr;
+                        auto out = DataObject::CreateDataObject(src->GetDataObjectType());
+                        if (!out) return nullptr;
+                        auto copyPS = [](PointSet* dst, PointSet* src) {
+                            auto pts = Points::New();
+                            if (src->GetPoints()) pts->DeepCopy(src->GetPoints());
+                            dst->SetPoints(pts);
+                            auto as = AttributeSet::New();
+                            if (auto sas = src->GetAttributeSet()) as->DeepCopy(sas);
+                            dst->SetAttributeSet(as);
+                        };
+                        if (auto sm = DynamicCast<SurfaceMesh>(src)) {
+                            if (auto dst = DynamicCast<SurfaceMesh>(out)) {
+                                if (dst->DeepCopy(sm)) return out;
+                                copyPS(dst, sm);
+                                if (auto f = sm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto vm = DynamicCast<VolumeMesh>(src)) {
+                            if (auto dst = DynamicCast<VolumeMesh>(out)) {
+                                copyPS(dst, vm);
+                                if (auto f = vm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto stm = DynamicCast<StructuredMesh>(src)) {
+                            if (auto dst = DynamicCast<StructuredMesh>(out)) {
+                                copyPS(dst, stm);
+                                if (auto f = stm->GetFaces()) {
+                                    auto nf = CellArray::New(); nf->DeepCopy(f); dst->SetFaces(nf);
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto um = DynamicCast<UnstructuredMesh>(src)) {
+                            if (auto dst = DynamicCast<UnstructuredMesh>(out)) {
+                                copyPS(dst, um);
+                                if (auto c = um->GetCellArray()) {
+                                    auto nc = CellArray::New(); nc->DeepCopy(c);
+                                    dst->SetCells(nc, um->GetCellTypes());
+                                }
+                                return out;
+                            }
+                        }
+                        if (auto ps = DynamicCast<PointSet>(src)) {
+                            if (auto dst = DynamicCast<PointSet>(out)) { copyPS(dst, ps); return out; }
+                        }
+                        return out;
+                    };
+                    auto outObj = cloneDN(rawOut);
+                    if (!outObj) outObj = rawOut;
+                    outObj->SetName(rawOut->GetName().empty() ? std::string("DeflectResult")
+                                                              : rawOut->GetName() + " (Deflect)");
+                    modelTreeWidget->addDataObjectToModelTree(outObj, Algorithm);
+                    rendererWidget->update();
+                    dialog->close();
+                });
+            });
 }
 
 
