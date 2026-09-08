@@ -132,7 +132,8 @@ int main() {
     auto scene = iGame::Scene::New();
 
     // 读取一个体网格（含点标量属性）
-    const std::string fileName = "./Models/Tet_Plane.vtk";
+    // AI 生成的四面体体网格测试模型（含点标量 P；替换原 Tet_Plane.vtk 测试）
+    const std::string fileName = "./Models/PointVolumeDemo_Brick.vtk";
     auto dataObj = iGame::FileIO::ReadFile(fileName);
     if (dataObj == nullptr) {
         igError("Error reading the file");
