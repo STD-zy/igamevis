@@ -2963,7 +2963,7 @@ void igQtMainWindow::initAllFilters() {
 
                 MeshTriangulationFilter::Pointer triangulation = MeshTriangulationFilter::New();
                 triangulation->SetInput(mesh);
-                if (!triangulation->Execute()) return false;
+                if (!triangulation->Execute()) return;
                 mesh = DynamicCast<SurfaceMesh>(triangulation->GetOutput());
 
                 igQtFilterDialogDockWidget* dialog = new igQtFilterDialogDockWidget(this);
