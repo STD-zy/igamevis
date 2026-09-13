@@ -25,6 +25,12 @@ public slots:
     void RefreshModel();
     // 按面板参数执行插值
     void Apply();
+    // 按核/邻域/策略启用或置灰相关参数
+    void UpdateParameterEnabled();
+    // 实时显示输出格点总数（A x B x C）
+    void UpdateGridCount();
+    // 显示插值数组的已选/总数
+    void UpdateArrayCount();
 
 public:
     // 把输入对象解析为点集（任何网格都是 PointSet 子类），失败返回 nullptr
@@ -33,4 +39,8 @@ public:
     Ui::PointVolumeInterpolatorWidget* ui;
     iGame::PointSet::Pointer m_PointSet{nullptr};
     OutputCallback m_OutputCallback;
+
+private:
+    // 用输入点云包围盒回填采样框
+    void RefreshBoundsFromInput();
 };

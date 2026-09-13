@@ -36,84 +36,73 @@
    <item>
     <widget class="QGroupBox" name="groupBox_Kernel">
      <property name="title">
-      <string>核函数</string>
+      <string>核函数与参数</string>
      </property>
-     <layout class="QVBoxLayout" name="verticalLayout_3">
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_kernel">
-        <item>
-         <widget class="QLabel" name="label_Kernel">
-          <property name="text">
-           <string>类型</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="comboBox_Kernel"/>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <layout class="QHBoxLayout" name="horizontalLayout_footprint">
-        <item>
-         <widget class="QLabel" name="label_Footprint">
-          <property name="text">
-           <string>邻域</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QComboBox" name="comboBox_Footprint"/>
-        </item>
-       </layout>
-      </item>
-     </layout>
-    </widget>
-   </item>
-   <item>
-    <widget class="QGroupBox" name="groupBox_KernelParams">
-     <property name="title">
-      <string>核参数</string>
-     </property>
-     <layout class="QFormLayout" name="formLayout_params">
+     <layout class="QFormLayout" name="formLayout_kernel">
+      <property name="horizontalSpacing">
+       <number>10</number>
+      </property>
+      <property name="verticalSpacing">
+       <number>6</number>
+      </property>
       <item row="0" column="0">
+       <widget class="QLabel" name="label_Kernel">
+        <property name="text">
+         <string>核函数</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="comboBox_Kernel"/>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_Footprint">
+        <property name="text">
+         <string>邻域</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="comboBox_Footprint"/>
+      </item>
+      <item row="2" column="0">
        <widget class="QLabel" name="label_Radius">
         <property name="text">
          <string>半径 (Radius)</string>
         </property>
        </widget>
       </item>
-      <item row="0" column="1">
+      <item row="2" column="1">
        <widget class="QLineEdit" name="lineEdit_Radius"/>
       </item>
-      <item row="1" column="0">
+      <item row="3" column="0">
        <widget class="QLabel" name="label_NumberOfPoints">
         <property name="text">
          <string>近邻数 (N Closest)</string>
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="3" column="1">
        <widget class="QLineEdit" name="lineEdit_NumberOfPoints"/>
       </item>
-      <item row="2" column="0">
+      <item row="4" column="0">
        <widget class="QLabel" name="label_Sharpness">
         <property name="text">
          <string>高斯锐度 (Sharpness)</string>
         </property>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="4" column="1">
        <widget class="QLineEdit" name="lineEdit_Sharpness"/>
       </item>
-      <item row="3" column="0">
+      <item row="5" column="0">
        <widget class="QLabel" name="label_Power">
         <property name="text">
          <string>Shepard 幂 (Power)</string>
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
+      <item row="5" column="1">
        <widget class="QLineEdit" name="lineEdit_Power"/>
       </item>
      </layout>
@@ -124,16 +113,54 @@
      <property name="title">
       <string>插值数组（来自输入点云）</string>
      </property>
-     <layout class="QFormLayout" name="formLayout_arrays">
-      <item row="0" column="0">
-       <widget class="QLabel" name="label_InterpolateArrays">
-        <property name="text">
-         <string>插值数组（勾选）</string>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <widget class="QListWidget" name="listWidget_Arrays">
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>110</height>
+         </size>
         </property>
        </widget>
       </item>
-      <item row="0" column="1">
-       <widget class="QListWidget" name="listWidget_Arrays"/>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_arrays">
+        <item>
+         <widget class="QPushButton" name="pushButton_SelectAll">
+          <property name="text">
+           <string>全选</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="pushButton_ClearAll">
+          <property name="text">
+           <string>清空</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_arrays">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="label_ArrayCount">
+          <property name="text">
+           <string>已选 0/0</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
      </layout>
     </widget>
@@ -246,6 +273,13 @@
         </item>
        </layout>
       </item>
+      <item>
+       <widget class="QLabel" name="label_GridCount">
+        <property name="text">
+         <string>格点数：-</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
@@ -257,15 +291,22 @@
     </widget>
    </item>
    <item>
-    <widget class="QLabel" name="label_Result">
+    <widget class="QLabel" name="label_ResultTitle">
      <property name="text">
-      <string>结果：</string>
+      <string>结果</string>
      </property>
-     <property name="wordWrap">
+    </widget>
+   </item>
+   <item>
+    <widget class="QPlainTextEdit" name="plainTextEdit_Result">
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>72</height>
+      </size>
+     </property>
+     <property name="readOnly">
       <bool>true</bool>
-     </property>
-     <property name="textInteractionFlags">
-      <set>Qt::TextSelectableByMouse</set>
      </property>
     </widget>
    </item>
@@ -277,7 +318,7 @@
      <property name="sizeHint" stdset="0">
       <size>
        <width>20</width>
-       <height>40</height>
+       <height>20</height>
       </size>
      </property>
     </spacer>
